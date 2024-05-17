@@ -1,0 +1,5 @@
+if (USE_COLLISION)
+    add_executable(ContactBenchs runContactBenchs.cpp EllipsoidContact.cpp ../BenchCommon.h)
+    target_link_libraries(ContactBenchs PRIVATE DomainCollection Core)
+    target_include_directories(ContactBenchs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+endif()

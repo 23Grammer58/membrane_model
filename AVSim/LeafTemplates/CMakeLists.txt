@@ -1,0 +1,6 @@
+add_library(LeafCollection OldOzaki.cpp Ozaki.cpp ThubricarValve.cpp TemplatesCollection.h Elliptic.cpp Elliptic.h)
+target_link_libraries(LeafCollection PUBLIC Core_MeshGen)
+target_link_libraries(LeafCollection PRIVATE GSL::gsl)
+target_include_directories(LeafCollection INTERFACE $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}> $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+install(FILES TemplatesCollection.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/AVSim/LeafTemplates/)
+set(LT_TARGETS LeafCollection PARENT_SCOPE)

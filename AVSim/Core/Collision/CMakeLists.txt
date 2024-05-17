@@ -1,0 +1,2 @@
+set(COLLISSION_SOURCES BulletCollisionManager.cpp CGALCollissionManager.cpp BridsonCollisionManager.cpp CollisionThickness.cpp PARENT_SCOPE)
+set(COLLISSION_HEADERS BulletCollisionManager.h CGALCollissionManager.h BulletCollisionAlgorithms.h BulletVolumeTree.h BridsonCollisionManager.h BridsonCollisionManager.inl CollisionThickness.h CollisionThickness.inl PARENT_SCOPE)

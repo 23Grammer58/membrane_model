@@ -1,0 +1,3 @@
+add_executable(ElasticBenchs runElasticBenchmark.cpp ElasticBenchmarks.cpp)
+target_link_libraries(ElasticBenchs PRIVATE DomainCollection Core_Forces Core_ForceAppliers Core_Renderers Core_Core GSL::gsl nlohmann_json::nlohmann_json)
+target_include_directories(ElasticBenchs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

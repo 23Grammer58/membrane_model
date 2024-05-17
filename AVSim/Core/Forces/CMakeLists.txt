@@ -1,0 +1,24 @@
+set(HEPOT_COLLECTION_SOURCES "")
+set(HEPOT_COLLECTION_HEADERS NeoGook.h Gent.h SVKirchhoff.h MooneyRivlin.h MayYin.h HolzapfelOgdenGasser.h HGO_GSTModel.h HyperElasticModel.h)
+set(FORCE_SOURCES Forces.cpp ForcesCommon.cpp
+                Integrator1D.cpp HyperElastic.cpp BendHyperElastic.cpp
+                MSM.cpp LinearElastic.cpp ${HEPOT_COLLECTION_SOURCES}
+                Pressure.cpp EdgeLoad.cpp SpurnPlane.cpp ClampedBndPenalty.cpp VertexLoad.cpp
+                SDFForce.cpp
+                PARENT_SCOPE)
+set(CONTACT_FORCE_SOURCES ContactForce.cpp PARENT_SCOPE)
+set(CONTACT_FORCE_HEADERS ContactForce.h PARENT_SCOPE)                
+set(FORCE_HEADERS Forces.h ForcesCommon.h
+                Integrator1D.h HyperElastic.h HyperElastic.inl BendHyperElastic.h MSM.h LinearElastic.h
+                ${HEPOT_COLLECTION_HEADERS}
+                Pressure.h Pressure.inl EdgeLoad.h SpurnPlane.h ClampedBndPenalty.h VertexLoad.h VertDampForce.h
+                SDFForce.h
+                PARENT_SCOPE)
+set(DATA_DRIVEN_SOURCES DataDriven.cpp DataGatherer.cpp
+                        DataDriven/ResponseStatistics.cpp DataDriven/ConjugatePairSearcher.cpp DataDriven/LinearZeroSeacher.cpp
+                        PARENT_SCOPE) 
+set(DATA_DRIVEN_HEADERS DataDriven.h DataGatherer.h
+                        DataDriven/ResponseStatistics.h DataDriven/ConjugatePairSearcher.h DataDriven/LinearZeroSeacher.h DataDriven/InterpolatorBase.h DataDriven/KNearestSearcher.h
+                        PARENT_SCOPE)                                       
+
+

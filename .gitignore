@@ -1,0 +1,11 @@
+cmake-build-*/
+result/
+old-parts/
+generated/
+bin/
+.idea/
+.vscode/
+data/
+tmp*/
+trash.*
+*/.Rhistory

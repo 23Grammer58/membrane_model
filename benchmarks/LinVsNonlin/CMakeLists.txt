@@ -1,0 +1,5 @@
+if (TARGET AorticValve)
+    add_executable(LinVsNonlin runLinVsNonlin.cpp LinVsNonlin.cpp)
+    target_link_libraries(LinVsNonlin PRIVATE DomainCollection AorticValve Core)
+    target_include_directories(LinVsNonlin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
