@@ -1,3 +1,5 @@
+## Установка membranesolver
+
 Программа с которой вам предстоит работать представленна целью `model` в проекте https://boogie.inm.ras.ru/liogky/membranemodel . Проект имеет очень много зависимостей (более 10 библиотек):
 - [INMOST](https://github.com/INMOST-DEV/INMOST) базовая версия, для чтения xml-файлов и для решения линейных систем
 - [Ani3d](https://sourceforge.net/projects/ani3d/) модули для построения сеток
@@ -47,4 +49,29 @@ Copyright (C) 2023, the Marchuk Institute of Numerical Mathematics of the Russia
  Command line options: 
   -cf, --config     FILE    <Configuration file>
  ...  
+```
+
+## Установка пакета для моделирования индентирования материала
+
+Установить [anifem++](https://github.com/INMOST-DEV/INMOST-FEM) можно выполнив следующие действия в терминале:
+1. Клонируем репозиторий
+```bash
+git clone https://github.com/INMOST-DEV/INMOST-FEM.git
+```
+2. Устанавливаем поддерживаемые пакетным менеджером зависимости
+```bash
+cd INMOST-FEM; mkdir build; cd build
+
+cmake -DWITH_INMOST=ON -DDOWNLOAD_inmost=ON -DWITH_KINSOL=ON 
+-DDOWNLOAD_sundials=ON -DWITH_EIGEN=ON -DDOWNLOAD_eigen3=ON 
+-DWITH_CASADI=ON -DDOWNLOAD_casadi=ON -DCOMPILE_EXAMPLES=ON 
+-DCOMPILE_TESTS=ON ../
+```
+3. Собираем проект при помощи CMake
+```bash
+cmake --build .
+
+cmake -DCMAKE_INSTALL_PREFIX=/home/student/libs/anifem++_install ..
+
+cmake --install .
 ```
