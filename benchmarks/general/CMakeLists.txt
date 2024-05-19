@@ -1,3 +1,6 @@
 add_executable(model main.cpp model.h model.cpp examples.h examples.cpp)
-target_link_libraries(model PRIVATE DomainCollection Core_Forces Core_IO Core_ForceAppliers Core_Renderers)
+if (USE_DATADRIVEN_FORCES)
+    target_compile_definitions(model PRIVATE "WITH_DATADRIVEN")
+endif()
+target_link_libraries(model PRIVATE DomainCollection Core_Forces Core_IO Core_ForceAppliers Core_Renderers Core_DataDriven)
 target_include_directories(model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

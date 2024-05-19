@@ -5,139 +5,95 @@
 #ifndef AORTIC_VALVE_INTERPOLATORBASE_H
 #define AORTIC_VALVE_INTERPOLATORBASE_H
 
-#include <CGAL/Simple_cartesian.h>
-#include <CGAL/Search_traits_3.h>
-#include <CGAL/Search_traits_adapter.h>
-#include <CGAL/point_generators_3.h>
-#include <CGAL/Orthogonal_k_neighbor_search.h>
-#include <CGAL/property_map.h>
-
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Delaunay_triangulation_3.h>
-#include <CGAL/Delaunay_triangulation_cell_base_3.h>
-#include <CGAL/Triangulation_vertex_base_with_info_3.h>
-
 #include <vector>
 #include <tuple>
 #include <functional>
+#include <memory>
+#include <cassert>
 
-template<typename DAT, typename PNT, typename VAL>
-class InterpolantBase{
-public:
-    std::vector<DAT>* m_cloud = nullptr;
-
-    virtual VAL operator()(const PNT& x) { return VAL(); }
-    virtual bool interpolated() { return false; }
-    virtual InterpolantBase* clone() = 0;
-    virtual void init(std::vector<DAT>* cloud) { m_cloud = cloud; }
-    virtual std::string getType() const { return "base"; }
+/// Base class for interpolation of values specified in 3D points
+template<typename DAT, typename PNT, typename VAL, int N = 3>
+class Interpolant{
+public:    
+    virtual bool fit(const DAT& data) = 0;
+    virtual VAL evaluate(const PNT& x) = 0;
+    virtual std::array<VAL, N> gradient(const PNT& x) = 0;
+    virtual bool defined_on(const PNT& x) const { return true; }
+    virtual std::unique_ptr<Interpolant<DAT, PNT, VAL, N>> clone() const = 0;
 };
 
+template<typename DAT, typename PNT, typename VAL, int N = 3>
+class MultiInterpolant: public Interpolant<DAT, PNT, VAL, N>{
+public:    
+    using Interp = Interpolant<DAT, PNT, VAL, N>;
+    using Strategy = std::function<int(const std::vector<std::unique_ptr<Interp>>& , const PNT&)>;
+    using Constraint = std::function<bool(const MultiInterpolant<DAT, PNT, VAL, N>& , const PNT&)>;
 
-template<typename DAT, typename PNT, typename VAL>
-class InterpolantFactory: public InterpolantBase<DAT, PNT, VAL>{
-public:
-    using IBASE = InterpolantBase<DAT, PNT, VAL>;
-    using Interpolant = std::shared_ptr<IBASE>;
+    std::vector<std::unique_ptr<Interp>> m_factory;
+    Strategy m_strategy = 
+        [](const std::vector<std::unique_ptr<Interp>>& interps, const PNT& x)->int{
+            for (int i = 0; i < interps.size(); ++i)
+                if (interps[i]->defined_on(x))
+                    return i;
+            return -1;        
+        };
+    Constraint m_constraint = [](const MultiInterpolant<DAT, PNT, VAL, N>& back, const PNT& x)->bool { return back.m_strategy(back.m_factory, x) != -1; };    
 
-    std::vector<Interpolant> factory;
-    bool m_interpolated = false;
-    std::function<VAL(InterpolantFactory&, const PNT& )> strategy =
-            [](InterpolantFactory& fact, const PNT& x){
-                fact.m_interpolated = false;
-                VAL res{};
-                for (int i = 0; i < fact.factory.size() && !fact.m_interpolated; ++i){
-                    res = fact.factory[i].get()->operator()(x);
-                    fact.m_interpolated = fact.factory[i].get()->interpolated();
-                }
-                return res;
-            };
-
-    void init(std::vector<DAT>* cloud) override {
-        for (auto& i: factory) i.get()->init(cloud);
-        InterpolantBase<DAT, PNT, VAL>::init(cloud);
+    MultiInterpolant() = default;
+    MultiInterpolant(const MultiInterpolant<DAT, PNT, VAL, N>& a): m_strategy(a.m_strategy), m_constraint{a.m_constraint} {
+        m_factory.resize(a.m_factory.size());
+        for (std::size_t i = 0; i < a.m_factory.size(); ++i) 
+            m_factory[i] = a.m_factory[i]->clone();
     }
-    InterpolantFactory& setStrategy(std::function<VAL(InterpolantFactory&, const PNT& )> newStrat) {
-        strategy = std::move(newStrat);
-        return *this;
-    }
-    InterpolantFactory& append(IBASE* inter) {
-        factory.emplace_back(inter->clone());
-        if (IBASE::m_cloud) factory.back().get()->init(IBASE::m_cloud);
-        return *this;
-    }
-    InterpolantFactory& append(std::shared_ptr<IBASE> inter) {
-        factory.push_back(inter);
-        if (IBASE::m_cloud) factory.back().get()->init(IBASE::m_cloud);
-        return *this;
-    }
+    MultiInterpolant(MultiInterpolant<DAT, PNT, VAL, N>&& a) = default;
+    bool fit(const DAT& data) override { bool res = true; for(auto& i: m_factory) res &= i->fit(data); return res; }
+    /// Set strategy of choose interpolant in current point
+    MultiInterpolant& setStrategy(Strategy newStrat) { return m_strategy = std::move(newStrat), *this; }
+    MultiInterpolant& setConstraint(Constraint newCstr) { return m_constraint = std::move(newCstr), *this; }
+    /// Add new interpolation variant
+    MultiInterpolant& append(Interp* inter) { return m_factory.emplace_back(inter->clone()), *this; }
+    MultiInterpolant& append(std::unique_ptr<Interp> inter) { return m_factory.emplace_back(std::move(inter)), *this; }
     template <typename INTERP>
-    InterpolantFactory& append(INTERP& inter) {
-        factory.emplace_back(inter.clone());
-        if (IBASE::m_cloud) factory.back().get()->init(IBASE::m_cloud);
-        return *this;
-    }
-
-    std::string getType() const override{
-        std::string type = "Factory{ ";
-        for (const auto& i: factory) type += i.get()->getType() + " -> ";
-        type += "}";
-        return type;
-    }
-    bool interpolated() override { return m_interpolated; }
-    IBASE* clone() override { return new InterpolantFactory(*this); }
-    VAL operator()(const PNT& x)  override  { return strategy(*this, x); }
+    typename std::enable_if<std::is_base_of<Interp, INTERP>::value, MultiInterpolant&>::type
+      append(INTERP inter) { return m_factory.emplace_back(std::make_unique<INTERP>(std::move(inter))), *this; }
+    VAL evaluate(const PNT& x) override { return m_factory[m_strategy(m_factory, x)]->evaluate(x); }
+    std::array<VAL, N> gradient(const PNT& x) override { return m_factory[m_strategy(m_factory, x)]->gradient(x); }
+    bool defined_on(const PNT& x) const override { return m_constraint(*this, x); }
+    std::unique_ptr<Interp> clone() const override { return std::make_unique<MultiInterpolant<DAT, PNT, VAL, N>>(*this); }
 };
 
-template<typename DAT, typename PNT, typename VAL>
-class InterpolantFactoryOwn: public InterpolantFactory<DAT, PNT, VAL>{
-public:
-    using IBASE = InterpolantBase<DAT, PNT, VAL>;
-    using Interpolant = std::shared_ptr<IBASE>;
-
-    std::shared_ptr<std::vector<DAT>> m_cloud;
-
-    InterpolantFactoryOwn& setCloud(std::vector<DAT> dat){
-        m_cloud = std::make_shared<std::vector<DAT>>(dat);
-        IBASE::m_cloud = m_cloud.get();
-        return *this;
-    }
-    IBASE* clone() override { return new InterpolantFactoryOwn(*this); }
-};
-
-
-template <typename DAT, typename PNT, typename VAL, typename T, typename ...Ts>
-void InterpolantFactoryAppender(InterpolantFactoryOwn<DAT, PNT, VAL>& factory, T interp, Ts ... ts){
+namespace internals{
+template <typename DAT, typename PNT, typename VAL, int N = 3, typename T, typename ...Ts>
+void MultiInterpolantAppender(MultiInterpolant<DAT, PNT, VAL, N>& factory, T interp, Ts ... ts){
     factory.append(interp);
     if constexpr (sizeof...(ts) > 0) { InterpolantFactoryAppender(factory, ts...); }
 }
-
-template <typename DAT, typename PNT, typename VAL, typename T, typename ...Ts>
-void InterpolantFactoryAppender(InterpolantFactory<DAT, PNT, VAL>& factory, T interp, Ts ... ts){
-    factory.append(interp);
-    if constexpr (sizeof...(ts) > 0) { InterpolantFactoryAppender(factory, ts...); }
 }
 
-template <typename PNT, typename VAL, typename DAT, typename T, typename ...Ts>
-InterpolantFactory<DAT, PNT, VAL> makeInterpolantFactoryOwn(std::vector<DAT> dat, T interp, Ts ... ts){
-    InterpolantFactoryOwn<DAT, PNT, VAL> factory;
-    factory.setCloud(dat).append(interp);
-    if constexpr (sizeof...(ts) > 0) { InterpolantFactoryAppender(factory, ts...); }
+template <typename PNT, typename VAL, typename DAT, int N = 3, typename T, typename ...Ts>
+MultiInterpolant<DAT, PNT, VAL, N> makeMultiInterpolant(T interp, Ts ... ts){
+    MultiInterpolant<DAT, PNT, VAL, N> factory;
+    factory.append(interp);
+    if constexpr (sizeof...(ts) > 0) { ::internals::MultiInterpolantAppender(factory, ts...); }
     return factory;
 }
 
-template <typename PNT, typename VAL, typename DAT, typename T, typename ...Ts>
-InterpolantFactory<DAT, PNT, VAL> makeInterpolantFactory(T interp, Ts ... ts){
-    InterpolantFactory<DAT, PNT, VAL> factory;
+template <typename PNT, typename VAL, typename DAT, int N = 3, typename T>
+MultiInterpolant<DAT, PNT, VAL, N> makeConstraintShell(T interp, std::function<bool(const PNT&)> constr){
+    MultiInterpolant<DAT, PNT, VAL, N> factory;
     factory.append(interp);
-    if constexpr (sizeof...(ts) > 0) { InterpolantFactoryAppender(factory, ts...); }
+    factory.setConstraint([constr](const MultiInterpolant<DAT, PNT, VAL, N>&, const PNT& x){ return constr(x); });
     return factory;
 }
 
+template <typename PNT, int N>
+std::function<bool(const PNT&)> makeSphericalConstraint(double R){
+    return [R](const PNT& x){
+        double sqr_r = 0;
+        for (int i = 0; i < N; ++i)
+            sqr_r += x[i]*x[i];
+        return sqr_r <= R;    
+    };
+}
 
-
-
-
-
-
-#endif //AORTIC_VALVE_INTERPOLATORBASE_H
+#endif  //AORTIC_VALVE_INTERPOLATORBASE_H

@@ -88,7 +88,7 @@ Mesh split_twice(const Mesh& mesh){
         points.push_back({p[0], p[1], p[2]});
         vert_remap[v] = points.size()-1;
     }
-    for (auto& e: mesh.edges()) {
+    for (auto e: mesh.edges()) {
         auto v = vert_around(mesh, e);
         auto p0 = mesh.point(v[0]), p1 = mesh.point(v[1]);
         points.push_back({(p0[0] + p1[0])/2, (p0[1] + p1[1])/2, (p0[2] + p1[2])/2});
@@ -96,7 +96,7 @@ Mesh split_twice(const Mesh& mesh){
     }
     int nf = mesh.num_faces();
     int fi = 0;
-    for (auto& f: mesh.faces()){
+    for (auto f: mesh.faces()){
         auto e = edge_around(mesh, f);
         auto vv = vert_around(mesh, f);
 //        std::array<std::array<V_ind, 2>, 3> ev;
@@ -226,7 +226,7 @@ Mesh get_invert_Mesh(const Mesh &mesh) {
     auto vlb = mesh.property_map<V_ind, int>("v:boundary_lbl");
     if (vlb.second){
         auto it = new_mesh.add_property_map<V_ind, int>("v:boundary_lbl");
-        for (auto& v: new_mesh.vertices())
+        for (auto v: new_mesh.vertices())
             it.first[v] = vlb.first[v];
     }
 

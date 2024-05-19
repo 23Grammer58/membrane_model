@@ -65,7 +65,7 @@ namespace World3d{
             bool data_from_tag = false;
 
             void registerObj(Object3D* obj) override {
-                A = obj->m_mesh.property_map<F_ind, DReal>(tagName);
+                A = obj->m_mesh.property_map<F_ind, T>(tagName);
                 data_from_tag = A.second;
             }
             void saveData(const DReal**  target, F_ind f, std::vector<V_ind>& around) override { if (data_from_tag) data = A[f]; else data = val; *target = &data; }
@@ -344,7 +344,7 @@ namespace World3d{
             return HH::makeOrthotropicInvariant(std::move(InvName), A);
         }
 
-        int add_watch(const std::function<SX(VarContainer<LocalVar>&, VarContainer<Invariant>&, casadi::SX U)>& watch_expr, bool quiet = false);
+        int add_watch(const std::function<SX(VarContainer<LocalVar>&, VarContainer<Invariant>&, casadi::SX U)>& watch_expr, bool quiet = false, bool use_random_prefix = false, const std::string& prefix = "he_watch");
 #ifdef USE_DEBUG_WATCHES
         Eigen::MatrixXd eval_watch(Object3D& obj, F_ind f, int watch_num, bool print = false);
         Eigen::MatrixXd eval_watch(Object3D& obj, F_ind f, GenFunction* watch, bool print = false);

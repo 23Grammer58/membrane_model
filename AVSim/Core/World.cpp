@@ -153,7 +153,7 @@ int World3d::World::ApplyNext() {
 }
 
 World3d::Force_ID World3d::World::addForce(World3d::Force f, World3d::ObjectID oid) {
-    return _objects[oid].first.add_force(f);
+    return _objects[oid].first.add_force(std::move(f));
 }
 
 void World3d::World::setForceApplier(World3d::ForceApplier f, World3d::ObjectID oid) {
@@ -190,7 +190,13 @@ double World3d::World::getShift(ObjectID id, unsigned normOut, unsigned normIn){
     struct ShiftRange{
         ConstProperty<V_ind, Point>* prop;
         Object3D* obj;
-        class iterator: public std::iterator<std::output_iterator_tag, Vector>{
+        class iterator{
+            using iterator_category = std::output_iterator_tag;
+            using value_type = Vector;
+            using difference_type = std::ptrdiff_t;
+            using pointer = Vector*;
+            using reference = Vector&;
+
             Mesh::Vertex_iterator vit;
             ConstProperty<V_ind, Point>* prop;
             Object3D* obj;

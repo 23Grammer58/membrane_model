@@ -580,7 +580,7 @@ MeshIndexType GuiApplication::MeshInstance::updateIndexBuffer(RenderedObject &ro
             MeshTools::compressIndices(ro.face.first, 0);
     indexBuffer.setData(compressed.first);
 
-    if (forced || mesh.indexTypeSize() != meshIndexTypeSize(compressed.second)) {
+    if (forced || meshIndexTypeSize(mesh.indexType()) != meshIndexTypeSize(compressed.second)) {
         mesh.setIndexBuffer(indexBuffer, 0, compressed.second);
     }
 

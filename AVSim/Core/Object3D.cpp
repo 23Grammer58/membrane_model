@@ -308,7 +308,7 @@ namespace World3d {
         uint32_t nt = mesh.num_faces();
         ob.write(reinterpret_cast<const char *> ((&nt)), sizeof(uint32_t));
         array<float, 3> v[4];
-        for (auto &f: mesh.faces()) {
+        for (auto f: mesh.faces()) {
             for (int i = 0; i < 3; ++i)
                 v[0][i] = n.first[f][i];
             auto itt = vertices_around_face(mesh.halfedge(f), mesh);
@@ -802,7 +802,7 @@ namespace World3d {
 
     Force_ID Object3D::add_force(Force f) {
         static int force_id = 0;
-        m_forces.insert({force_id, f});
+        m_forces.insert({force_id, std::move(f)});
         return force_id++;
     }
 

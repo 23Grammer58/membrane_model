@@ -508,11 +508,11 @@ static double predicted_radius(double P /*Hg mm*/, double R0 /*mm*/, double T /*
 
 static double test_spheriable(Object3D& obj, double& _max_div, double& _mid_div){
     double r = 0;
-    for (auto& v: obj.m_mesh.vertices())
+    for (auto v: obj.m_mesh.vertices())
         r += sqrt((obj.m_x[v] - CGAL::ORIGIN).squared_length());
     r /= obj.m_mesh.num_vertices();
     double mid_div = 0, max_div = 0;
-    for (auto& v: obj.m_mesh.vertices()){
+    for (auto v: obj.m_mesh.vertices()){
         double div = fabs(sqrt((obj.m_x[v] - CGAL::ORIGIN).squared_length()) - r);
         mid_div += div;
         max_div = (max_div >= div) ? max_div : div;

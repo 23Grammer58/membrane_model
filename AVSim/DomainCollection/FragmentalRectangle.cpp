@@ -146,6 +146,8 @@ AniMesh generate_rectangle(double a, double b, double size, int fragments){
             }
         }
     }
+
+    std::set<std::array<int, 4>> tmp;     
     for (int l = 0; l < 4; ++l){
         int lind[4] = {0};
         for (int k = 0; k < 3; ++k){
@@ -154,6 +156,13 @@ AniMesh generate_rectangle(double a, double b, double size, int fragments){
         for (int k = 0; k < 3; ++k) {
             if (am.faces[wfi[l][1]*3 + k] != lind[1] && am.faces[wfi[l][1]*3 + k] != lind[2])
                 lind[3] = am.faces[3 * wfi[l][1] + k];
+        }
+        {   //TODO: work around a strange bug appear for ./model stretch_rectangle 100 100 3 4 0 0 0 1.57079633
+            std::array<int, 4> alind{lind[0], lind[1], lind[2], lind[3]};
+            auto r0 = tmp.size();
+            std::sort(alind.begin(), alind.end());
+            tmp.insert(alind);
+            if (r0 == tmp.size()) continue;
         }
         am.faces[3 * wfi[l][0] + 0] = lind[0], am.faces[3 * wfi[l][0] + 1] = lind[1], am.faces[3 * wfi[l][0] + 2] = lind[3];
         am.faces[3 * wfi[l][1] + 0] = lind[0], am.faces[3 * wfi[l][1] + 1] = lind[3], am.faces[3 * wfi[l][1] + 2] = lind[2];

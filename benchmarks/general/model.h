@@ -54,6 +54,66 @@ struct Model{
     static std::string getObjectTraitTypeName(ObjectTraitType t);
     static const std::map<std::string, ObjectTraitType>& getObjectTraitTypeToNameMap();
     static ObjectTraitType getObjectTraitTypeByName(const std::string& s);
+    enum PotentialType{
+        ANALYTICAL = 0,
+        //EXTERNAL,
+        DATADRIVEN,
+    };
+    static std::string getPotentialTypeName(PotentialType t);
+    static std::map<std::string, PotentialType>& getPotentialTypeToNameMap();
+    static PotentialType getPotentialTypeByName(const std::string& t);
+    struct AnalyticPotentialInfo{
+        std::string fpotential = "potential.energy";
+        Energy_Parser m_energy_expr;
+    };
+    // struct ExternalPotentialInfo{
+    //     std::string potential_lib = "potential.so";
+    // };
+    struct DataDrivenPotentialInfo{
+        enum Type{
+            KNEAREST,
+            LINEAR,
+        };
+        struct LinearDat{
+            double R_fit = 0.03;
+            double R_trust = 0.04;
+            unsigned char octant_mask = 0xFE; // all octants exclude positive 
+        };
+        struct KNearestDat{
+            double R_trust = 1e20;
+            double metric_pow = 1;
+            int k = 1;
+        };
+        struct InterpRegion{
+            Type m_tp = KNEAREST;
+            LinearDat ld;
+            KNearestDat kd;
+
+            InterpRegion& setType(Type tp) { return m_tp = tp, *this; }
+            LinearDat linear() const { return ld; }
+            KNearestDat knearest() const { return kd; }
+            LinearDat& linear() { return ld; }
+            KNearestDat& knearest() { return kd; }
+
+            static std::string typeName(Type tp);
+            static Type typeByName(const std::string& val);
+            std::ostream& print(std::ostream& out  = std::cout) const;
+        };
+
+        std::vector<std::string> data_files;
+        std::vector<InterpRegion> interp;
+    };
+    struct PotentialInfo{
+        PotentialType m_type = ANALYTICAL;
+        AnalyticPotentialInfo m_ap;
+        //ExternalPotentialInfo m_ext;
+        DataDrivenPotentialInfo m_ddp;
+
+        void setType(PotentialType type) { m_type = type; }
+        AnalyticPotentialInfo& analytical() { return m_ap; }
+        //ExternalPotentialInfo& external() { return m_ext; }
+        DataDrivenPotentialInfo& datadriven() { return m_ddp; }
+    };
 
     struct TraitValue{
         MetaTriMesh::ElementSparsity m_etype = MetaTriMesh::ElementSparsity::NODE;
@@ -109,8 +169,8 @@ struct Model{
 
     int execute(int argc = 0, char** argv = nullptr);
 
+    PotentialInfo m_potential;
     std::string fmesh = "mesh.vtk", 
-                fpotential = "potental.energy", 
                 save_dir = "", 
                 save_prefix = "res",
                 to_gen = "generated";
@@ -129,7 +189,6 @@ struct Model{
     bool m_perform_postcomps = true; 
     
     MetaTriMesh m_mtm;
-    Energy_Parser m_energy_expr;
     std::map<ObjectTraitType, TraitValue> m_input_traits;
     std::map<unsigned int, SaveTrait> m_out_traits;
     std::map<MetaTriMesh::ElementSparsity, std::map<std::string, std::string>> m_save_intag;

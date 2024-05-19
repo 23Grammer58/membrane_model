@@ -15,6 +15,8 @@
 #include "SpurnPlane.h"
 #include "HyperElastic.h"
 #include "BendHyperElastic.h"
+#include "HyperElasticResponse.h"
+#include "MaterialThicknessHelper.h"
 
 #include "NeoGook.h"
 #include "Gent.h"

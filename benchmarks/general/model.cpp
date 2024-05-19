@@ -3,6 +3,11 @@
 #include "AVSim/Core/NSWorldWrapper.h"
 #include "AVSim/Solvers/NonLinearSolverKinsol.h"
 #include "AVSim/Core/NonLinearSolverCustom.h"
+#include <bitset>
+
+#ifdef WITH_DATADRIVEN
+#include "AVSim/Core/Forces/DataDriven.h"
+#endif
 
 #if __cplusplus >= 201703L
 using namespace std::filesystem;
@@ -53,6 +58,29 @@ Model::ObjectTraitType Model::getObjectTraitTypeByName(const std::string& s){
     if (it != rmap.end()) return it->second;
     else throw std::runtime_error("Can't find object trait with name = \"" + s + "\"");
 }
+std::string Model::getPotentialTypeName(PotentialType t){
+    static const char* res[] = {
+        "ANALYTICAL",
+        //"EXTERNAL",
+        "DATADRIVEN"
+    };
+    return res[static_cast<unsigned>(t)];
+}
+std::map<std::string, Model::PotentialType>& Model::getPotentialTypeToNameMap(){
+    static std::map<std::string, Model::PotentialType> rmap{
+        {"ANALYTICAL", ANALYTICAL},
+        //{"EXTERNAL", EXTERNAL},
+        {"DATADRIVEN", DATADRIVEN}
+    };
+    return rmap;
+}
+Model::PotentialType Model::getPotentialTypeByName(const std::string& s){
+    const auto& rmap = getPotentialTypeToNameMap();
+    auto it = rmap.find(s);
+    if (it != rmap.end()) return it->second;
+    else throw std::runtime_error("Can't find potential type with name = \"" + s + "\"");
+}
+
 std::ostream& Model::TraitValue::print(std::ostream& out) const {
     out << (m_real ? "DVAL" : "IVAL") << "[" << m_dim << "] ";
     out << "on "<< MetaTriMesh::get_sparsity_name(m_etype) << " ";
@@ -144,6 +172,31 @@ std::string Model::getSaveTraitName(unsigned int trait){
     for (auto& v: rmap) if (v.second & trait) 
         return v.first;
     return std::string();
+}
+using MDDIR = Model::DataDrivenPotentialInfo::InterpRegion;
+std::string MDDIR::typeName(Type tp){
+    static const char* types[] = {"KNEAREST", "LINEAR"};
+    return types[static_cast<int>(tp)];
+}
+Model::DataDrivenPotentialInfo::Type MDDIR::typeByName(const std::string& val){
+    static std::map<std::string, Type> rmap{
+        {"KNEAREST", KNEAREST},
+        {"LINEAR", LINEAR},
+    };
+    return rmap.at(val);
+}
+std::ostream& MDDIR::print(std::ostream& out) const{
+    switch (m_tp){
+        case KNEAREST:{
+            auto a = knearest();
+            return out << typeName(KNEAREST) << " " << a.R_trust << " " << a.k << " " << a.metric_pow;
+        }
+        case LINEAR:{
+            auto a = linear();
+            return out << typeName(LINEAR) << " " << a.R_trust << " " << a.R_fit << " " << std::bitset<8>(a.octant_mask);
+        }
+    }
+    return out;
 }
 std::string Model::CustomSolverIteration::solverName(int sol_type){
     switch(sol_type) {
@@ -364,12 +417,26 @@ Model& Model::parse(std::vector<std::string> args){
             continue;    
         } else if (compare(i, "-e", "--energy")){
             expect_at_least_n_args(1);
-            fpotential = args[++i];
-            energy_expr = Energy_Parser().setCodeFromFile(fpotential).LexicalAnalysis().SyntaxAnalysis().Simplify();
+            m_potential.setType(ANALYTICAL);
+            auto& a = m_potential.analytical();
+            a.fpotential = args[++i];
+            energy_expr = Energy_Parser().setCodeFromFile(a.fpotential).LexicalAnalysis().SyntaxAnalysis().Simplify();
             specific_energy = true;
             // energy_expr.print_parsed_state(std::cout) << "\n";
             continue;
-        } else if (compare(i, "-t", "--target")){
+        } 
+#ifdef WITH_DATADRIVEN
+        else if (compare(i, "-dd", "--data_tabs")){
+            expect_at_least_n_args(1);
+            m_potential.setType(DATADRIVEN);
+            auto& d = m_potential.datadriven();
+            do{
+                d.data_files.push_back(args[++i]);
+            } while (i+1 < args.size() && !args[i+1].empty() && args[i+1][0] != '-');
+            continue;
+        }
+#endif 
+        else if (compare(i, "-t", "--target")){
             expect_at_least_n_args(1);
             save_dir = args[++i];
             continue; 
@@ -385,8 +452,13 @@ Model& Model::parse(std::vector<std::string> args){
             mtm.print_content_info() << "\n";
             continue;
         } else if (compare(i, "-se", "--show_elast")){
-            associate_mesh_data_with_energy_params();
-            energy_expr.print_parsed_state(std::cout) << "\n";
+            if (m_potential.m_type == ANALYTICAL){
+                associate_mesh_data_with_energy_params();
+                energy_expr.print_parsed_state(std::cout) << "\n";
+            } else {
+                std::cout << "Warning: elastic parameters available only for " << getPotentialTypeName(ANALYTICAL) << " potential, "
+                          << "but current potential type is " << getPotentialTypeName(m_potential.m_type) << "\n" << std::endl;
+            }
             continue;
         } else if (compare(i, "-sl", "--show_lin")){
             auto slvs = LinearSolver::getAvailableSolvers();
@@ -406,6 +478,9 @@ Model& Model::parse(std::vector<std::string> args){
                 throw std::runtime_error("Expected name of model theory (MEMBRANE or SHELL) but faced \"" + std::string(val) + "\"");
             continue;          
         } else if (compare(i, "-ep", "--elast_prm")){
+            if (m_potential.m_type != ANALYTICAL)
+                throw std::runtime_error("Specification of elastic parameters available only for " + getPotentialTypeName(ANALYTICAL) + 
+                    " potential, but current potential type is " + getPotentialTypeName(m_potential.m_type));
             expect_at_least_n_args(2);
             auto name = args[++i];
             auto sval = args[++i];
@@ -464,7 +539,59 @@ Model& Model::parse(std::vector<std::string> args){
             expect_at_least_n_args(1);
             regen_potential = to_bool(args[++i]);
             continue;
-        } else if (compare(i, "-ns", "--nlin_sol")){
+        } 
+#ifdef WITH_DATADRIVEN        
+        else if (compare(i, "-di", "--dat_interp")){
+            if (m_potential.m_type != DATADRIVEN)
+                throw std::runtime_error("Specification of data interpolation available only for " + getPotentialTypeName(DATADRIVEN) + 
+                    " potential type, but current potential type is " + getPotentialTypeName(m_potential.m_type));
+            expect_at_least_n_args(3);
+            do {
+                auto interp_name = args[++i];
+                using DDI = DataDrivenPotentialInfo;
+                DDI::InterpRegion ir;
+                ir.setType(DDI::InterpRegion::typeByName(interp_name));
+                int expect_args = 0;
+                switch (ir.m_tp){
+                    case DDI::KNEAREST: expect_args = 3; break;
+                    case DDI::LINEAR: expect_args = 3; break;
+                }
+                expect_at_least_n_args(expect_args);
+                auto r0 = is_double(args[++i]);
+                if (!r0.first)
+                    throw std::runtime_error("Expected real parameter TRUSTED_REGION, but faced = \"" + args[i] + "\"");
+                std::string v1 = args[++i];
+                std::string v2 = args[++i];
+                switch (ir.m_tp){
+                    case DDI::KNEAREST:{
+                        auto i1 = is_int(v1);
+                        if (!i1.first)
+                            throw std::runtime_error("Expected integer parameter k_neighbour, but faced = \"" + v1 + "\"");
+                        auto r2 = is_double(v2);
+                        if (!r2.first)
+                            throw std::runtime_error("Expected real parameter inverse_distance_metric_power, but faced = \"" + v2 + "\"");    
+                        auto& a = ir.knearest();
+                        a.R_trust = r0.second; a.k = i1.second; a.metric_pow = r2.second;
+                        break;
+                    }
+                    case DDI::LINEAR: {
+                        auto r1 = is_double(v1);
+                        if (!r1.first)
+                            throw std::runtime_error("Expected real parameter fit_radius, but faced = \"" + v1 + "\""); 
+                        auto i2 = is_double(v2);
+                        if (!i2.first)
+                            throw std::runtime_error("Expected uchar parameter octant_mask, but faced = \"" + v2 + "\"");
+                        auto& a = ir.linear();
+                        a.R_trust = r0.second; a.R_fit = r1.second; a.octant_mask = i2.second;
+                        break;  
+                    }
+                }  
+                m_potential.datadriven().interp.push_back(ir); 
+            } while(i+1 < args.size() && !args[i+1].empty() && args[i+1][0] != '-');
+            continue;
+        } 
+#endif        
+        else if (compare(i, "-ns", "--nlin_sol")){
             expect_at_least_n_args(2);
             do{
                 auto nslv_name = args[++i];
@@ -698,7 +825,14 @@ Model& Model::parse(std::vector<std::string> args){
         throw std::runtime_error("Faced unparsed command line argument \"" + std::string(args[i]) + "\"");
     }
     if (!specific_mesh) set_mesh();
-    if (!specific_energy) energy_expr = Energy_Parser().setCodeFromFile(fpotential).LexicalAnalysis().SyntaxAnalysis().Simplify();
+    if (!specific_energy && m_potential.m_type == ANALYTICAL) {
+        auto& a = m_potential.analytical();
+        energy_expr = Energy_Parser().setCodeFromFile(a.fpotential).LexicalAnalysis().SyntaxAnalysis().Simplify();
+    } else if (m_potential.m_type == DATADRIVEN){
+        auto& a = m_potential.datadriven();
+        if (a.interp.empty())
+            a.interp.push_back(DataDrivenPotentialInfo::InterpRegion());
+    }
     if (m_solverItData.empty()){
         CustomSolverIteration csi;
         csi.ns_type = 2;
@@ -710,7 +844,8 @@ Model& Model::parse(std::vector<std::string> args){
         traits[t.first].m_def_value[0] = NAN;
         traits[t.first].m_tag_name.resize(0);
     }
-    associate_mesh_data_with_energy_params();
+    if (m_potential.m_type == ANALYTICAL)
+        associate_mesh_data_with_energy_params();
     if (!save_dir.empty() && save_dir.back() != '/') save_dir += "/";
     #ifndef USE_MAGNUM_GUI
     m_view = false;
@@ -760,8 +895,21 @@ Model& Model::parse(std::vector<std::string> args){
             std::cout << "  " << names[i] << ": " << storage_type[i] << " " << size_info[i] << " " << data_type[i] << "[" << dim_val[i] << "] on " << sparsity[i] << " " << status[i] << "\n";
         }
         std::cout << "\n";
-        std::cout << "Potential from file \"" << fpotential << "\"" << (regen_potential ? " will be regenerated" : " will NOT be regenerated") << " in directory \"" << to_gen << "\"\n";
-        energy_expr.print_parsed_state(std::cout, "  ");
+        if (m_potential.m_type == ANALYTICAL){
+            auto& a = m_potential.analytical();
+            std::cout << getPotentialTypeName(m_potential.m_type) << " potential from file \"" << a.fpotential << "\"" << (regen_potential ? " will be regenerated" : " will NOT be regenerated") << " in directory \"" << to_gen << "\"\n";
+            energy_expr.print_parsed_state(std::cout, "  ");
+        } else if (m_potential.m_type == DATADRIVEN){
+            auto& a = m_potential.datadriven();
+            std::cout << getPotentialTypeName(m_potential.m_type) << " potential with data from files: \n";
+            for (auto f: a.data_files)
+                std::cout << "  \"" << f << "\"\n";
+            std::cout << "Data interpolation pipeline: ";
+            for (auto& v: a.interp){
+                v.print(std::cout) << " "; 
+            }
+            std::cout << "\n"; 
+        }
         std::cout << "Mechanical model: " << (is_membrane_approx ? "MEMBRANE" : "SHELL") << "\n\n";
         std::cout << "Input traits:\n";
         show_traits(std::cout, "  ");
@@ -805,15 +953,20 @@ Model& Model::parse(std::vector<std::string> args){
         if (std::isnan(t.m_def_value[0]) && t.m_tag_name.empty())
             throw std::runtime_error("Can't start computations without " + getObjectTraitTypeName(required_traits[i]) + " trait");
     }
-    for (auto& p: energy_expr.getParameters()) 
-        if (p.def_tag.empty() && std::isnan(p.def_val))
-            throw std::runtime_error("Can't start computations without association any value with potential parameter \"" + p.name + "\"");
-    for (auto& p: energy_expr.getFibers()) 
-        if (p.def_tag.empty())
-            throw std::runtime_error("Can't start computations without association vector tag on mesh with potential fiber \"" + p.name + "\"");
+    if (m_potential.m_type == ANALYTICAL){
+        auto& a = m_potential.analytical();
+        for (auto& p: energy_expr.getParameters()) 
+            if (p.def_tag.empty() && std::isnan(p.def_val))
+                throw std::runtime_error("Can't start computations without association any value with potential parameter \"" + p.name + "\"");
+        for (auto& p: energy_expr.getFibers()) 
+            if (p.def_tag.empty())
+                throw std::runtime_error("Can't start computations without association vector tag on mesh with potential fiber \"" + p.name + "\"");
+        a.m_energy_expr = std::move(energy_expr);
+    } else if (m_potential.m_type == DATADRIVEN)
+        if (m_potential.datadriven().data_files.empty())
+            throw std::runtime_error("Can't start computation with DATADRIVEN potential if data tables is not specified");
     
     m_mtm = std::move(mtm);
-    m_energy_expr = std::move(energy_expr);
     m_input_traits = std::move(traits);
     m_out_traits = std::move(save_traits);
     for (auto& sd: save_intag)
@@ -931,7 +1084,10 @@ void Model::printArgsHelpMessage(const std::string& prefix, std::ostream& out){
         << prefix << "  -rm, --remove_tag STR STR <Remove tag in input mesh: first STR should be NODE|EDGE|FACE|HALFEDGE, second STR is the name of tag to be deleted>\n"
         << prefix << "  -mv, --rename_tag STR STR STR <Rename tag in input mesh: first STR should be NODE|EDGE|FACE|HALFEDGE, second STR is current name of tag, \n"
         << prefix << "                                   third STR is new name of tag>\n"
-        << prefix << "  -e , --energy     FILE    <Specify input energy file, default=\"potental.energy\">" << "\n"
+        << prefix << "  -e , --energy     FILE    <Specify input energy file, default=\"potential.energy\">" << "\n"
+#ifdef WITH_DATADRIVEN
+        << prefix << "  -dd, --data_tabs  FILE[+] <Specify energy xi-response data table files, default=\"\">" << "\n"
+#endif        
         << prefix << "  -t , --target     PATH    <Directory to save results, default=\"\">" << "\n"
         << prefix << "  -nm, --name       STR     <Prefix for saved results, default=\"res\">" << "\n"
         << prefix << "  -sm, --show_mesh          <Print list of mesh tag names and common mesh information>" << "\n"
@@ -939,7 +1095,20 @@ void Model::printArgsHelpMessage(const std::string& prefix, std::ostream& out){
         << prefix << "  -st, --show_trait         <Print list of supported mesh traits and it's current expected values>" << "\n"
         << prefix << "  -sl, --show_lin           <Print list of available linear solvers>" << "\n"
         << prefix << "  -mt, --model_type STR     <Set type of theory model: MEMBRANE or SHELL, default=MEMBRANE>\n"
-        << prefix << "  -ep, --elast_prm  STR VAL <Associate elastic parameter or fiber with name STR to tag name VAL or raw DVAL[] value VAL depending on VAL type>" << "\n"
+        << prefix << "  -ep, --elast_prm  STR VAL <"
+#ifdef WITH_DATADRIVEN          
+        << "For ANALYTICAL potential only\n" 
+        << prefix << "                             " 
+#endif          
+                                                << "Associate elastic parameter or fiber with name STR to tag name VAL or raw DVAL[] value VAL depending on VAL type>" << "\n"
+#ifdef WITH_DATADRIVEN        
+        << prefix << "  -di, --dat_interp STR[+]  <For DATADRIVEN potential only\n"
+        << prefix << "                             Add specific interpolation rules followed after previously added rules parameters\n"
+        << prefix << "                             Syntax is follow: TYPE TRUSTED_REGION TYPE_PARAMETERS\n"
+        << prefix << "                             TYPE: KNEAREST | LINEAR; TRUSTED_REGION (DVAL) is radius of domain in xi-domain\n"
+        << prefix << "                             TYPE_PARAMETERS: for KNEAREST <k_neighbour inverse_distance_metric_power>,\n"
+        << prefix << "                                              for LINEAR <fit_radius octant_mask>, default=KNEAREST 1e20 1 1>" << "\n" 
+#endif        
         << prefix << "  -tr, --trait_from STR VAL <Associate mesh trait with name STR to tag name VAL or raw DVAL[*] value VAL depending on VAL type>" << "\n"
         << prefix << "  -vw, --view       BVAL    <Create ImGui debug view window if available>" << "\n"
         << prefix << "  -ns, --nlin_sol   STR[+]  <Add specific solver parameters followed after previous added specific parameters\n"
@@ -947,7 +1116,7 @@ void Model::printArgsHelpMessage(const std::string& prefix, std::ostream& out){
         << prefix << "                             NONLINEAR_SLV_TYPE: KINSOL | NEWTON | RELAX\n"
         << prefix << "                             NONLINEAR_SLV_TYPE_PARAMETERS: for KINSOL <maxnits>,\n"
         << prefix << "                                                            for NEWTON <maxnits full_step>\n"
-        << prefix << "                                                            for RELAX: <delta, relax_its relax_pfreq>, default=KINSOL 200>" << "\n"
+        << prefix << "                                                            for RELAX: <delta relax_its relax_pfreq>, default=KINSOL 200>" << "\n"
         << prefix << "  -ls, --lin_sol    STR     <Set type of linear solver, default=\"inner_mptiluc\">" << "\n"
         << prefix << "  -lp, --lin_prm    STR STR <Set some parameter of linear solver: name_of_parameter value_of_parameter>" << "\n"
         << prefix << "  -nt, --nlin_tol   DVAL[2] <Set nonlinear absolute tolerance and relative tolerance, default=1e-7 1e-7>\n"
@@ -1034,144 +1203,208 @@ int Model::execute(int argc, char** argv){
     else
         throw std::runtime_error("Trait " + getObjectTraitTypeName(THICKNESS_DTAG) + " isn't specified");    
     
-    std::vector<std::pair<casadi::SX, HEM::ParamSource>> eprm;
-    for (auto& x: m_energy_expr.getParameters()){
-        std::pair<casadi::SX, HEM::ParamSource> p;
-        p.first = casadi::SX::sym(x.name);
-        if (!x.def_tag.empty()){
-            if (!m_mtm.createTagOnMesh<F_ind, DReal>(&m, x.def_tag, "f:prm:" + x.name, true))
-                throw std::runtime_error("Can't create \"" + x.name + "\" tag from meta mesh tag \"" + x.def_tag + "\"");
-            p.second = HEM::ParamSource(HEM::ParamSource::TAG_T, "f:prm:" + x.name, NAN);
-        } else if (!std::isnan(x.def_val)){
-            p.second = HEM::ParamSource(HEM::ParamSource::VAL_T, "", x.def_val);
-        } else  
-            throw std::runtime_error("Elastic parameter \"" + x.name + "\" isn't specified");
-        eprm.emplace_back(std::move(p));    
-    }
-    const auto& efibs = m_energy_expr.getFibers();
-    if (!efibs.empty()){
-        // specify fiber data
-        auto _n0 = set_n0(obj);
-        for (auto f: efibs){
-            if (!f.def_tag.empty()){
-                if (!m_mtm.createTagOnMesh<F_ind, std::array<DReal, 3>>(&m, f.def_tag, "f:fib:" + f.name, true))
-                    throw std::runtime_error("Can't create \"" + ("f:fib:" + f.name) + "\" tag from meta mesh tag \"" + f.def_tag + "\""); 
-                auto p = m.property_map<F_ind, std::array<DReal, 3>>("f:fib:" + f.name).first;
-                bool have_out_surface_vec = false;
-                for (auto f: m.faces()){
-                    auto d = p[f];
-                    if (abs(d[0]) < 1e-14 && abs(d[1]) < 1e-14 && abs(d[2]) < 1e-14){
-                        p[f] = std::array<DReal, 3>{0, 0, 0};
-                        continue;
+    Force_ID ef_id = -1, bf_id = -1;
+    if (m_potential.m_type == ANALYTICAL){
+        auto a = m_potential.analytical();
+        std::vector<std::pair<casadi::SX, HEM::ParamSource>> eprm;
+        for (auto& x: a.m_energy_expr.getParameters()){
+            std::pair<casadi::SX, HEM::ParamSource> p;
+            p.first = casadi::SX::sym(x.name);
+            if (!x.def_tag.empty()){
+                if (!m_mtm.createTagOnMesh<F_ind, DReal>(&m, x.def_tag, "f:prm:" + x.name, true))
+                    throw std::runtime_error("Can't create \"" + x.name + "\" tag from meta mesh tag \"" + x.def_tag + "\"");
+                p.second = HEM::ParamSource(HEM::ParamSource::TAG_T, "f:prm:" + x.name, NAN);
+            } else if (!std::isnan(x.def_val)){
+                p.second = HEM::ParamSource(HEM::ParamSource::VAL_T, "", x.def_val);
+            } else  
+                throw std::runtime_error("Elastic parameter \"" + x.name + "\" isn't specified");
+            eprm.emplace_back(std::move(p));    
+        }
+        const auto& efibs = a.m_energy_expr.getFibers();
+        if (!efibs.empty()){
+            // specify fiber data
+            auto _n0 = set_n0(obj);
+            for (auto f: efibs){
+                if (!f.def_tag.empty()){
+                    if (!m_mtm.createTagOnMesh<F_ind, std::array<DReal, 3>>(&m, f.def_tag, "f:fib:" + f.name, true))
+                        throw std::runtime_error("Can't create \"" + ("f:fib:" + f.name) + "\" tag from meta mesh tag \"" + f.def_tag + "\""); 
+                    auto p = m.property_map<F_ind, std::array<DReal, 3>>("f:fib:" + f.name).first;
+                    bool have_out_surface_vec = false;
+                    for (auto f: m.faces()){
+                        auto d = p[f];
+                        if (abs(d[0]) < 1e-14 && abs(d[1]) < 1e-14 && abs(d[2]) < 1e-14){
+                            p[f] = std::array<DReal, 3>{0, 0, 0};
+                            continue;
+                        }
+                        auto d_len = std::hypot(d[0], d[1], d[2]);
+                        for (int k = 0; k < 3; ++k) d[k] /= d_len;
+                        auto scl = Vector(d[0], d[1], d[2]) * _n0[f];
+                        // project data if required
+                        if (abs(scl) > 100 * std::numeric_limits<DReal>::epsilon())
+                            have_out_surface_vec = true;   
+                        if (1 - abs(scl) < 100 * std::numeric_limits<DReal>::epsilon()){
+                            p[f] = std::array<DReal, 3>{0, 0, 0};
+                        } else {
+                            Vector r = Vector(d[0], d[1], d[2]) - scl * _n0[f];
+                            r /= sqrt(r.squared_length());
+                            p[f] = std::array<DReal, 3>{r[0], r[1], r[2]};
+                        }
                     }
-                    auto d_len = std::hypot(d[0], d[1], d[2]);
-                    for (int k = 0; k < 3; ++k) d[k] /= d_len;
-                    auto scl = Vector(d[0], d[1], d[2]) * _n0[f];
-                    // project data if required
-                    if (abs(scl) > 100 * std::numeric_limits<DReal>::epsilon())
-                        have_out_surface_vec = true;   
-                    if (1 - abs(scl) < 100 * std::numeric_limits<DReal>::epsilon()){
-                        p[f] = std::array<DReal, 3>{0, 0, 0};
-                    } else {
-                        Vector r = Vector(d[0], d[1], d[2]) - scl * _n0[f];
-                        r /= sqrt(r.squared_length());
-                        p[f] = std::array<DReal, 3>{r[0], r[1], r[2]};
-                    }
+                    if (have_out_surface_vec)
+                        std::cout << "Warning: Fiber from meta tag \"" << f.def_tag << "\" had not in-initial-surface directions and was projected\n";       
+                } else 
+                    throw std::runtime_error("Elastic fiber \"" + f.name + "\" isn't specified"); 
+            }
+            if (_n0.second) m.remove_property_map(_n0.first);
+        }
+        std::vector<std::pair<casadi::SX, HEM::InvariantDescr>> einvs;
+        for (auto x: a.m_energy_expr.getInvariants()){
+            switch(x.type){
+                case Energy_Parser::Invariants::I1_T:{
+                    einvs.push_back({casadi::SX::sym("I[1]"), {HEM::InvariantDescr::I1_T}}); break;
                 }
-                if (have_out_surface_vec)
-                    std::cout << "Warning: Fiber from meta tag \"" << f.def_tag << "\" had not in-initial-surface directions and was projected\n";       
-            } else 
-                throw std::runtime_error("Elastic fiber \"" + f.name + "\" isn't specified"); 
-        }
-        if (_n0.second) m.remove_property_map(_n0.first);
-    }
-    std::vector<std::pair<casadi::SX, HEM::InvariantDescr>> einvs;
-    for (auto x: m_energy_expr.getInvariants()){
-        switch(x.type){
-            case Energy_Parser::Invariants::I1_T:{
-                einvs.push_back({casadi::SX::sym("I[1]"), {HEM::InvariantDescr::I1_T}}); break;
-            }
-            case Energy_Parser::Invariants::I2_T:{
-                einvs.push_back({casadi::SX::sym("I[2]"), {HEM::InvariantDescr::I2_T}}); break;
-            }
-            case Energy_Parser::Invariants::J_T:{
-                einvs.push_back({casadi::SX::sym("J[]"), {HEM::InvariantDescr::J_T}}); break;
-            }
-            case Energy_Parser::Invariants::If_T:{
-                einvs.push_back({casadi::SX::sym("I[" + efibs[x.v1].name + "]"), {HEM::InvariantDescr::If_T, "f:fib:" + efibs[x.v1].name}}); break;
-            }
-            default:{ //Ifs_T,
-                einvs.push_back({casadi::SX::sym("I[" + efibs[x.v1].name + "," + efibs[x.v2].name + "]"), {HEM::InvariantDescr::Ifs_T, "f:fib:" + efibs[x.v1].name, "f:fib:" + efibs[x.v2].name}}); break;
+                case Energy_Parser::Invariants::I2_T:{
+                    einvs.push_back({casadi::SX::sym("I[2]"), {HEM::InvariantDescr::I2_T}}); break;
+                }
+                case Energy_Parser::Invariants::J_T:{
+                    einvs.push_back({casadi::SX::sym("J[]"), {HEM::InvariantDescr::J_T}}); break;
+                }
+                case Energy_Parser::Invariants::If_T:{
+                    einvs.push_back({casadi::SX::sym("I[" + efibs[x.v1].name + "]"), {HEM::InvariantDescr::If_T, "f:fib:" + efibs[x.v1].name}}); break;
+                }
+                default:{ //Ifs_T,
+                    einvs.push_back({casadi::SX::sym("I[" + efibs[x.v1].name + "," + efibs[x.v2].name + "]"), {HEM::InvariantDescr::Ifs_T, "f:fib:" + efibs[x.v1].name, "f:fib:" + efibs[x.v2].name}}); break;
+                }
             }
         }
-    }
-    casadi::SX epotential;
-    {
-        std::vector<casadi::SX> prm(eprm.size()), inv(einvs.size());
-        for (std::size_t i = 0; i < eprm.size(); ++i) prm[i] = eprm[i].first;
-        for (std::size_t i = 0; i < einvs.size(); ++i) inv[i] = einvs[i].first;
-        epotential = casadi::SX::simplify(m_energy_expr.Evaluate(prm, inv));
-    }
-    
-    Force elast_f = HyperElasticModel(h, eprm, einvs, epotential, to_gen, regen_potential, path(fpotential).stem().c_str());
-    elast_f.target<HyperElasticForceBase>()->prepareJacobianFunction(regen_potential); elast_f.target<HyperElasticForceBase>()->f.setVerbosity(2);
-    Force_ID ef_id = w.addForce(std::move(elast_f), oid);
-    Force_ID bf_id = -1;
-    if (!is_membrane_approx){
-        // prepare bending force
-        Force bend_f = BendingForce(obj.m_forces[ef_id].target<HyperElasticForceBase>()->f, regen_potential);
-        bend_f.target<BendingForce>()->prepareJacobianFunction(regen_potential); bend_f.target<BendingForce>()->setVerbosity(4);
-        trait = m_input_traits[CLAMPED_EDGE_VECTOR_DTAG];
-        //prepare shell boundary marks (FREE or CLAMPED)
-        std::map<E_ind, BendingForce::BoundaryData::Entry> boundary;
-        if (!trait.m_tag_name.empty()){
-            auto rit = m_mtm.edge_data.find(trait.m_tag_name);
-            if (rit == m_mtm.edge_data.end()) throw std::runtime_error("Can't find specified trait " + getObjectTraitTypeName(CLAMPED_EDGE_VECTOR_DTAG));
-            auto& r = rit->second;
-            for (auto e: m.edges()){
-                auto f = face_around(m, e);
-                if (f[1].second) continue;
-                auto v = vert_around(m, e);
-                if (!((obj.m_boundary[v[0]] & 0xF) && (obj.m_boundary[v[1]] & 0xF))){
-                    boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
-                } else {
-                    std::array<double, 3> res;
-                    r.get_element<std::array<double, 3>>(e.idx(), res);
-                    auto len = sqrt(res[0]*res[0] + res[1]*res[1] + res[2]*res[2]);
-                    if (len > 1e-5){
-                        for (int k = 0; k < 3; ++k) res[k] /= len;
-                        boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::CLAMPED, res);
+        casadi::SX epotential;
+        {
+            std::vector<casadi::SX> prm(eprm.size()), inv(einvs.size());
+            for (std::size_t i = 0; i < eprm.size(); ++i) prm[i] = eprm[i].first;
+            for (std::size_t i = 0; i < einvs.size(); ++i) inv[i] = einvs[i].first;
+            epotential = casadi::SX::simplify(a.m_energy_expr.Evaluate(prm, inv));
+        }
+        
+        Force elast_f = HyperElasticModel(h, eprm, einvs, epotential, to_gen, regen_potential, path(a.fpotential).stem().c_str());
+        elast_f.target<HyperElasticForceBase>()->prepareJacobianFunction(regen_potential); elast_f.target<HyperElasticForceBase>()->f.setVerbosity(2);
+        ef_id = w.addForce(std::move(elast_f), oid);
+        if (!is_membrane_approx){
+            // prepare bending force
+            Force bend_f = BendingForce(obj.m_forces[ef_id].target<HyperElasticForceBase>()->f, regen_potential);
+            bend_f.target<BendingForce>()->prepareJacobianFunction(regen_potential); bend_f.target<BendingForce>()->setVerbosity(4);
+            trait = m_input_traits[CLAMPED_EDGE_VECTOR_DTAG];
+            //prepare shell boundary marks (FREE or CLAMPED)
+            std::map<E_ind, BendingForce::BoundaryData::Entry> boundary;
+            if (!trait.m_tag_name.empty()){
+                auto rit = m_mtm.edge_data.find(trait.m_tag_name);
+                if (rit == m_mtm.edge_data.end()) throw std::runtime_error("Can't find specified trait " + getObjectTraitTypeName(CLAMPED_EDGE_VECTOR_DTAG));
+                auto& r = rit->second;
+                for (auto e: m.edges()){
+                    auto f = face_around(m, e);
+                    if (f[1].second) continue;
+                    auto v = vert_around(m, e);
+                    if (!((obj.m_boundary[v[0]] & 0xF) && (obj.m_boundary[v[1]] & 0xF))){
+                        boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
+                    } else {
+                        std::array<double, 3> res;
+                        r.get_element<std::array<double, 3>>(e.idx(), res);
+                        auto len = sqrt(res[0]*res[0] + res[1]*res[1] + res[2]*res[2]);
+                        if (len > 1e-5){
+                            for (int k = 0; k < 3; ++k) res[k] /= len;
+                            boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::CLAMPED, res);
+                        } else
+                            boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
+                    } 
+                }
+            } else if (!std::isnan(trait.m_def_value[0]) && !std::isnan(trait.m_def_value[1]) && !std::isnan(trait.m_def_value[2])){
+                std::array<double, 3> res;
+                auto len = sqrt(res[0]*res[0] + res[1]*res[1] + res[2]*res[2]);
+                bool is_zero = (len < 1e-5);
+                if (!is_zero) for (int k = 0; k < 3; ++k) res[k] /= len;
+                for (auto e: m.edges()){
+                    auto f = face_around(m, e);
+                    if (f[1].second) continue;
+                    auto v = vert_around(m, e);
+                    if (!((obj.m_boundary[v[0]] & 0xF) && (obj.m_boundary[v[1]] & 0xF))){
+                        boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
+                    } else if (is_zero){
+                            boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::CLAMPED, res);
                     } else
                         boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
-                } 
+                }
+            } 
+            // else {
+            //     for (auto e: m.edges()){
+            //         auto f = face_around(m, e);
+            //         if (f[1].second) continue;
+            //         boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
+            //     }
+            // }
+            if (!boundary.empty())
+                bend_f.target<BendingForce>()->set_boundary_data(obj, boundary);
+            bf_id = w.addForce(std::move(bend_f), oid);
+        }
+    } else if (m_potential.m_type == DATADRIVEN){
+#ifdef WITH_DATADRIVEN        
+        auto a = m_potential.datadriven();
+        //read data from tables
+        RegionalResponseTable com_tab;
+        for (auto f: a.data_files){
+            RegionalResponseTable tmp;
+            tmp.read(f);
+            tmp.squashAll();
+            com_tab.append(tmp);
+        }
+        com_tab.squashAll();
+        ResponseInterpFactory interps;
+        std::cout << "Dataset contains " << com_tab.cregion(0).size() << " unique points" << std::endl;
+        using DDI = DataDrivenPotentialInfo;
+        // create interpolation pipeline
+        for (std::size_t i = 0; i < a.interp.size(); ++i){
+            auto& p = a.interp[i];
+            switch(p.m_tp){
+                case DDI::KNEAREST:{
+                    auto kd = p.knearest();
+                    ResponseKNearest kns(kd.k);
+                    kns.setLocalInterpolator(std::make_unique<ResponseLocKInvDist>(kd.metric_pow));
+                    auto shell = makeRespConstraintShell(kns, makeRespSphericalConstraint(kd.R_trust));
+                    interps.append(std::make_unique<decltype(shell)>(std::move(shell)));
+                    interps.m_factory.back()->fit(com_tab.cregion(0));
+                    break;
+                }
+                case DDI::LINEAR:{
+                    auto kd = p.linear();
+                    LinearElasticResponse le;
+                    auto constr = [oct = kd.octant_mask, r = kd.R_trust](const std::array<double, 3>& x)->bool{
+                        char mask = (x[0] > 0 ? 0 : 1) + (x[1] > 0 ? 0 : 2) + (x[2] > 0 ? 0 : 4);
+                        if (oct & (1 << mask)) return true; 
+                        return (x[0]*x[0] + x[1]*x[1] + x[2]*x[2] < r*r);
+                    };
+                    auto shell = makeRespConstraintShell(std::move(le), constr);
+                    interps.append(std::make_unique<decltype(shell)>(std::move(shell)));
+                    interps.m_factory.back()->fit(RegionalResponseTable::filter(com_tab, makeRespSphericalConstraint(kd.R_fit)).cregion(0));
+                    break;
+                }
+                default:
+                    throw std::runtime_error("Faced unknown DATADRIVEN interpolant type");
             }
-        } else if (!std::isnan(trait.m_def_value[0]) && !std::isnan(trait.m_def_value[1]) && !std::isnan(trait.m_def_value[2])){
-            std::array<double, 3> res;
-            auto len = sqrt(res[0]*res[0] + res[1]*res[1] + res[2]*res[2]);
-            bool is_zero = (len < 1e-5);
-            if (!is_zero) for (int k = 0; k < 3; ++k) res[k] /= len;
-            for (auto e: m.edges()){
-                auto f = face_around(m, e);
-                if (f[1].second) continue;
-                auto v = vert_around(m, e);
-                if (!((obj.m_boundary[v[0]] & 0xF) && (obj.m_boundary[v[1]] & 0xF))){
-                    boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
-                } else if (is_zero){
-                        boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::CLAMPED, res);
-                } else
-                    boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
-            }
-        } 
-        // else {
-        //     for (auto e: m.edges()){
-        //         auto f = face_around(m, e);
-        //         if (f[1].second) continue;
-        //         boundary[e] = BendingForce::BoundaryData::Entry(BendingForce::BoundaryData::FREE);
-        //     }
-        // }
-        if (!boundary.empty())
-            bend_f.target<BendingForce>()->set_boundary_data(obj, boundary);
-        bf_id = w.addForce(std::move(bend_f), oid);
+        }
+        // create elastic force from interpolant
+        DataDrivenMaterial ddm;
+        ddm.setInterpolant(std::make_unique<decltype(interps)>(std::move(interps)));
+        HEForce elast_f;
+        elast_f.setMaterial(std::move(ddm));
+        auto H_ = h.makeDataRequier();
+        H_->registerObj(&obj);
+        elast_f.setThickness(ThicknessFromDataRequier(std::move(H_)));
+        ef_id = w.addForce(std::move(elast_f), oid);
+        if (!m_perform_solve)
+            obj.m_forces[ef_id].target<HEForce>()->m_mat->registerObj(&obj);
+        if (!is_membrane_approx)
+            throw std::runtime_error("DATADRIVEN potential currently does not support shell mechanical model");    
+#else
+        throw std::runtime_error("Atteption to use DATADRIVEN potential in version of model without DATADRIVEN potential support");
+#endif        
     }
 
     // set pressure force
@@ -1484,19 +1717,16 @@ int Model::execute(int argc, char** argv){
         auto strait2 = m_out_traits[SAVE_CAUCHY_STRESS3D];
         auto strait3 = m_out_traits[SAVE_CAUCHY_TENSION3D];
         bool comp_stress_3d = !strait2.m_tag_name.empty() || !strait3.m_tag_name.empty();
-        if (!strait.m_tag_name.empty() || !strait1.m_tag_name.empty() || comp_stress_3d){
+        bool prepare_strains = !strait.m_tag_name.empty() || !strait1.m_tag_name.empty() || comp_stress_3d || 
+                    (m_potential.m_type == DATADRIVEN && !m_out_traits[SAVE_PK2_STRESS].m_tag_name.empty());
+        if (prepare_strains){
             auto F_ = m.add_property_map<F_ind, std::array<double, 6>>("f:tensor:F").first;
             auto C2d_ = m.add_property_map<F_ind, std::array<double, 3>>("f:tensor:C2d").first;
 
-            // auto S2d_ = set_S2d(obj, check_flat_initial_template(obj));
-            // auto D_ = set_D_vecs(obj);
-            // auto Ap_ = set_Ap(obj);
-            // auto S_ = set_S(obj);
             auto L_ = set_L(obj);
             auto x_ = obj.m_x;
             auto p_ = obj.m_x0;
             for (auto f: m.faces()){
-                // DReal Ap = Ap_[f], Aq = sqrt(S_[f].squared_length());
                 auto v = vert_around(m, f);
                 Eigen::Matrix<DReal, 3, 3> P, Q;
                 Q <<    x_[v[0]][0], x_[v[1]][0], x_[v[2]][0],
@@ -1518,13 +1748,28 @@ int Model::execute(int argc, char** argv){
                 m_mtm.readTagDataFromMesh<F_ind>(m, "f:tensor:C2d", strait1.m_tag_name);    
         }
         strait = m_out_traits[SAVE_PK2_STRESS];
-        if (!strait.m_tag_name.empty() || comp_stress_3d){
+        bool prepare_pk2_stress = !strait.m_tag_name.empty() || comp_stress_3d;
+        if (prepare_pk2_stress){
             auto S_ = m.add_property_map<F_ind, std::array<double, 3>>("f:tensor:S").first;
-            auto watch_num = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.add_watch(DefaultHyperElasticForce::compute_S_tensor_expr);
-            for (auto f: m.faces()){
-                auto Stensor = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.eval_watch(obj, f, watch_num);
-                S_[f] = std::array<double, 3>{Stensor(0,0), Stensor(1,1), Stensor(0,1)};
+            if (m_potential.m_type == ANALYTICAL){
+                auto watch_num = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.add_watch(DefaultHyperElasticForce::compute_S_tensor_expr, false, true);
+                for (auto f: m.faces()){
+                    auto Stensor = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.eval_watch(obj, f, watch_num);
+                    S_[f] = std::array<double, 3>{Stensor(0,0), Stensor(1,1), Stensor(0,1)};
+                }
+                auto gen_dir = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.gen_dir;
+                auto watch_name = obj.m_forces[ef_id].target<HyperElasticForceBase>()->f.m_watches.back().func->name();
+                remove(path(gen_dir)/path(watch_name).concat(".c"));
+                remove(path(gen_dir)/path(watch_name).concat(".so"));
+            } 
+#ifdef WITH_DATADRIVEN
+            else if (m_potential.m_type == DATADRIVEN){
+                auto& he = *(obj.m_forces[ef_id].target<HEForce>()->m_mat);
+                auto C2d_ = m.property_map<F_ind, std::array<double, 3>>("f:tensor:C2d").first;
+                for (auto f: obj.m_mesh.faces())
+                    S_[f] = he.PK2_tensor({(C2d_[f][0]-1)/2, (C2d_[f][1]-1)/2, (C2d_[f][2])/2}, f);
             }
+#endif
             if (!strait.m_tag_name.empty())
                 m_mtm.readTagDataFromMesh<F_ind>(m, "f:tensor:S", strait.m_tag_name);
         }
@@ -1572,7 +1817,7 @@ int Model::execute(int argc, char** argv){
         strait = m_out_traits[SAVE_CURVATURE];
         if (!strait.m_tag_name.empty()){
             if (bf_id < 0){
-                std::cout << "Warning: Curvature storing supported only for shell approximation\n";
+                std::cout << "Warning: Curvature storing supported only for shell approximation and ANALYTICAL potential\n";
             } else {
                 auto k_ = m.add_property_map<F_ind, std::array<double, 3>>("f:tensor:curvature").first;
                 obj.m_forces[bf_id].target<BendingForce>()->add_watch(BendingForce::compute_current_curvature_expr);

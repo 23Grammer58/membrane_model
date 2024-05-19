@@ -3,6 +3,7 @@
 //
 
 #include "HyperElastic.h"
+#include <chrono>
 
 using namespace World3d;
 using namespace HH;
@@ -971,7 +972,7 @@ int DefaultHyperElasticForce::element_matrix(Object3D &obj, ForceBase::LocMatrix
     return genStat;
 }
 
-int DefaultHyperElasticForce::add_watch(const std::function<SX(VarContainer<LocalVar>&, VarContainer<Invariant>&, casadi::SX U)>& watch_expr, bool quiet){
+int DefaultHyperElasticForce::add_watch(const std::function<SX(VarContainer<LocalVar>&, VarContainer<Invariant>&, casadi::SX U)>& watch_expr, bool quiet, bool use_random_prefix, const std::string& user_prefix){
 #ifdef USE_DEBUG_WATCHES
     GenFunction watch;
     watch.set_generatedInput(inputVars);
@@ -979,7 +980,12 @@ int DefaultHyperElasticForce::add_watch(const std::function<SX(VarContainer<Loca
     watch.update_input();
     static int nwatch = 0;
     m_watches.emplace_back(std::move(watch));
-    string watch_name = "HyperElastic_watch" + std::to_string(nwatch);
+    string prefix = user_prefix;
+    if (use_random_prefix){
+        auto cur = std::chrono::high_resolution_clock::now();
+        prefix = user_prefix + "_" + std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(cur.time_since_epoch()).count()) + "_";
+    }
+    string watch_name = prefix + std::to_string(nwatch);
     if (!quiet){
         std::cout << "Generate watch \"" << watch_name << "\" on \"" << force_name << "\" with input: \n";
         m_watches.back().print_input();

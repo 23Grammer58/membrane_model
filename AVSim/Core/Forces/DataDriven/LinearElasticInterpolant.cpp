@@ -2,38 +2,28 @@
 // Created by alex on 01.02.2021.
 //
 
-#include "LinearZeroSeacher.h"
+#include "LinearElasticInterpolant.h"
 using namespace std;
+using namespace World3d;
 
-bool LinearElastisity::is_positive(const std::array<double, 6>& C){
+bool LinearElasticResponse::is_positive(const std::array<double, 6>& C){
     return ((C[0] > 0) && (C[0] * C[2] > C[1] * C[1]) && (C[0]*C[2]*C[4] + 2 * C[1]*C[3]*C[5] > C[0]*C[5]*C[5] + C[2]*C[3]*C[3] + C[4]*C[1]*C[1]));
 }
 
-void LinearElastisity::init(const cloud_t& data){
+bool LinearElasticResponse::fit(const std::vector<Response>& data){
     least_squares_fit(data);
     if (!is_positive(m_C))
         conditional_optimization(data);
+    return true;    
 }
 
-void comp_E_sigma(const ResponseStatistics::Elem & q, array<double, 3>& E, array<double, 3>& S){
-    double e_mk1 = exp(-2 * q.ksi[0]), e_mk2 = exp(-2 * q.ksi[1]), k3 = q.ksi[2];
-    double e_k1 = 1.0/e_mk1, e_k2 = 1.0 / e_mk2;
-    E[0] = 0.5 * (expm1(2 * q.ksi[0]));
-    E[1] = 0.5 * k3 * e_k1;
-    E[2] = 0.5 * (expm1(2 * q.ksi[1]) + k3 * k3 * e_k1);
-    S[0] = e_mk1 * (q.response[0] - 2 * k3 * q.response[2]) + e_mk2 * k3 * k3 * q.response[1];
-    S[1] = -e_mk2 * k3 * q.response[1] + e_mk1 * q.response[2];
-    S[2] = e_mk2 * q.response[1];
-}
-
-void set_e_to_loc(const array<double, 3>& E, double E_loc[3][6]){
+static void set_e_to_loc(const array<double, 3>& E, double E_loc[3][6]){
     E_loc[0][0] = E[0], E_loc[0][1] = 2 * E[1], E_loc[0][2] = E[2];
     E_loc[1][1] = E[0], E_loc[1][3] = E[2], E_loc[1][5] = 2 * E[1];
     E_loc[2][2] = E[0], E_loc[2][3] = 2 * E[1], E_loc[2][4] = E[2];
 }
 
-void LinearElastisity::least_squares_fit(const cloud_t& data){
-#ifdef USE_EIGEN_LINSQ
+void LinearElasticResponse::least_squares_fit(const std::vector<Response>& data){
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> A;
     Eigen::VectorXd b;
     A.resize(3 * data.size(), 6);
@@ -42,7 +32,8 @@ void LinearElastisity::least_squares_fit(const cloud_t& data){
     array<double, 3> e{0}, s{0};
     double e_loc[3][6] = {0};
     for (int i = 0; i < data.size(); ++i){
-        comp_E_sigma(data[i], e, s);
+        Response::toStressStrainTensor(data[i].xi, data[i].response, e, s);
+        std::swap(e[1], e[2]); std::swap(s[1], s[2]);
         set_e_to_loc(e, e_loc);
         for (int j = 0; j < 3; ++j) {
             for (int l = 0; l < 6; ++l)
@@ -51,54 +42,9 @@ void LinearElastisity::least_squares_fit(const cloud_t& data){
         }
     }
     x = A.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(b);
-#else
-    int n = 3 * data.size(), p = m_C.size();
-    double chisq = 0;
-    gsl_matrix * E = gsl_matrix_alloc (n, p);
-    gsl_vector * sigma = gsl_vector_alloc (n);
-
-    gsl_vector* c = gsl_vector_alloc (p);
-    gsl_matrix* cov = gsl_matrix_alloc (p, p);
-
-
-    array<double, 3> e{0}, s{0};
-    double e_loc[3][6] = {0};
-    for (int i = 0; i < data.size(); ++i){
-        comp_E_sigma(data[i], e, s);
-        set_e_to_loc(e, e_loc);
-        for (int j = 0; j < 3; ++j) {
-            for (int l = 0; l < 6; ++l)
-                gsl_matrix_set(E, 3 * i + j, l, e_loc[j][l]);
-            gsl_vector_set(sigma, 3*i+j, s[j]);
-        }
-    }
-
-    {
-        gsl_multifit_linear_workspace *work
-                = gsl_multifit_linear_alloc(n, p);
-        gsl_multifit_linear(E, sigma, c, cov, &chisq, work);
-        gsl_multifit_linear_free(work);
-    }
-
-    m_C[0] = gsl_vector_get(c, 0);
-    m_C[1] = gsl_vector_get(c, 1);
-    m_C[2] = gsl_vector_get(c, 5);
-    m_C[3] = gsl_vector_get(c, 2);
-    m_C[4] = gsl_vector_get(c, 4);
-    m_C[5] = gsl_vector_get(c, 3);
-
-    gsl_matrix_free (E);
-    gsl_vector_free (sigma);
-    gsl_vector_free (c);
-    gsl_matrix_free (cov);
-#endif
 }
 
-std::array<double, 3> LinearElastisity::operator()(const array<double, 3>& x){
-    return operator()(x.data());
-}
-
-std::array<double, 3> LinearElastisity::operator()(const double* x){
+std::array<double, 3> LinearElasticResponse::evaluate(const double* x){
     double e_k1 = exp(2 * x[0]), e_k2 = exp(2 *x[1]), k3 = x[2];
     std::array<double, 3> E, C, res;
     E[0] = 0.5 * expm1(2*x[0]);
@@ -113,7 +59,46 @@ std::array<double, 3> LinearElastisity::operator()(const double* x){
     return res;
 }
 
-void LinearElastisity::conditional_optimization(const cloud_t& data){
+std::array<double, 6> LinearElasticResponse::response_gradient(const std::array<double, 3>& x){
+    double k0 = exp(2 * x[0]), k1 = exp(2 *x[1]), k2 = x[2];
+    double dk00 = 2*k0, dk11 = 2*k1, dk22 = 1;
+    double  E0 = 0.5 * expm1(2*x[0]), 
+            E1 = 0.5 * k2 * k0, 
+            E2 = 0.5 * (expm1(2 * x[1]) + k2 * k2 * k0);
+    double dE00 = k0;
+    double dE10 = k2*k0, dE12 = E0;
+    double dE20 = k2 * k2 * k0, dE21 = k1, dE22 = k2 * k0;
+    
+    double C0 = m_C[0]*E0 + 2 * m_C[1] * E1 + m_C[3] * E2;
+    double C1 = 2 * m_C[1]*E0 + 4 * m_C[2] * E1 + 2 * m_C[5] * E2;
+    double C2 = m_C[3]*E0 + 2 * m_C[5] * E1 + m_C[4] * E2;
+
+    double C00 = m_C[0]*dE00 + 2 * m_C[1] * dE10 + m_C[3] * dE20;
+    // double C01 = m_C[3] * dE21;
+    double C02 = 2 * m_C[1] * dE12 + m_C[3] * dE22;
+    double C10 = 2 * m_C[1]*dE00 + 4 * m_C[2] * dE10 + 2 * m_C[5] * dE20;
+    // double C11 = 2 * m_C[5] * dE21;
+    double C12 = 4 * m_C[2] * dE12 + 2 * m_C[5] * dE22;
+    double C20 = m_C[3]*dE00 + 2 * m_C[5] * dE10 + m_C[4] * dE20;
+    double C21 = m_C[4] * dE21;
+    double C22 = 2 * m_C[5] * dE12 + m_C[4] * dE22;
+
+    double r00 = k0 * ( 2 * (C0 + k2 * (C1 + k2 * C2)) + (C00 + k2 * (C10 + k2 * C20)) );
+    double r02 = k0 * ( C02 + C1 + k2 * (C10 + 2*C2 + k2 * C22));
+    double r10 = k1 * C20;
+    double r11 = k1 * ( 2*C2 + C21 );
+    double r12 = k1 * C22;
+    double r22 = k0 * ( 0.5 * C12 + C2 + k2*C22);
+
+    return {r00, r11, r22, r10, r02, r12};
+}
+
+std::array<std::array<double, 3>, 3> LinearElasticResponse::gradient(const std::array<double, 3>& xi){
+    auto r = response_gradient(xi);
+    return {std::array<double, 3>{r[0], r[3], r[4]}, {r[3], r[1], r[5]}, {r[4], r[5], r[2]}};
+}
+
+void LinearElasticResponse::conditional_optimization(const std::vector<Response>& data){
     Eigen::Matrix<double, Eigen::Dynamic, 6> A;
     Eigen::VectorXd b;
     A.resize(3 * data.size(), Eigen::NoChange);
@@ -121,7 +106,8 @@ void LinearElastisity::conditional_optimization(const cloud_t& data){
     array<double, 3> e{0}, s{0};
     double e_loc[3][6] = {0};
     for (int i = 0; i < data.size(); ++i){
-        comp_E_sigma(data[i], e, s);
+        Response::toStressStrainTensor(data[i].xi, data[i].response, e, s);
+        std::swap(e[1], e[2]); std::swap(s[1], s[2]);
         set_e_to_loc(e, e_loc);
         for (int j = 0; j < 3; ++j) {
             for (int l = 0; l < 6; ++l)
@@ -173,20 +159,4 @@ void LinearElastisity::conditional_optimization(const cloud_t& data){
     for (auto it = sol.variable_values_begin(); it != sol.variable_values_end(); ++it){
         *(sit++) = CGAL::to_double(*it);
     }
-}
-
-LinearZeroSearcher &LinearZeroSearcher::setNearZeroPointChooser(function<Cloud(const Cloud &)> f) {
-    nearZeroPointChooser = std::move(f);
-    return *this;
-}
-
-void LinearZeroSearcher::init(vector<DAT> *cloud) {
-    Cloud res = nearZeroPointChooser(*cloud);
-    le.init(res);
-    InterpolantBase3D::init(cloud);
-}
-
-std::array<double, 3> LinearZeroSearcher::operator()(const array<double, 3> &x) {
-    m_interpolated = trust_region(x);
-    return le(x);
 }

@@ -83,7 +83,7 @@ endif()
 if (USE_DATADRIVEN_FORCES)
     prefixed_install("${DATA_DRIVEN_HEADERS}" "AVSim/Core")
     add_library(Core_DataDriven ${DATA_DRIVEN_SOURCES} ${DATA_DRIVEN_HEADERS})
-    target_link_libraries(Core_DataDriven PUBLIC Core_Forces Core_ForceAppliers Boost::serialization Boost::filesystem GSL::gsl)
+    target_link_libraries(Core_DataDriven PUBLIC Core_Forces Core_ForceAppliers GSL::gsl)
 
     target_link_libraries(Core INTERFACE Core_DataDriven)
     set(CORE_TARGETS Core_DataDriven ${CORE_TARGETS}) 

@@ -17,7 +17,7 @@ static bool ObReadTag(World3d::Object3D& obj, std::string filename, std::string 
     std::ifstream ob(filename, std::ios::binary);
     if (!ob) return false;
     auto m_x = obj.m_mesh.add_property_map<World3d::V_ind, World3d::Point>(tag);
-    for (auto& v: obj.m_mesh.vertices()){
+    for (auto v: obj.m_mesh.vertices()){
         std::array<double, 3> P;
         ob.read(reinterpret_cast<char *> ((P.data())), 3 * sizeof(double));
         m_x.first[v] = World3d::Point(P[0], P[1], P[2]);

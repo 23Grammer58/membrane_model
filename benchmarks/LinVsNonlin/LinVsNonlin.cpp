@@ -21,7 +21,7 @@ static bool ObSaveTag(const Object3D& obj, string filename, string tag){
     ofstream ob(filename, ios::binary | ios::trunc);
     if (!ob) return false;
     auto m_x = obj.m_mesh.property_map<V_ind, Point>(tag).first;
-    for (auto& v: obj.m_mesh.vertices()){
+    for (auto v: obj.m_mesh.vertices()){
         std::array<double, 3> P = {m_x[v][0], m_x[v][1], m_x[v][2]};
         ob.write(reinterpret_cast<const char *> ((P.data())), 3 * sizeof(double));
     }
@@ -33,7 +33,7 @@ static bool ObReadTag(Object3D& obj, string filename, string tag){
     ifstream ob(filename, std::ios::binary);
     if (!ob) return false;
     auto m_x = obj.m_mesh.add_property_map<V_ind, Point>(tag);
-    for (auto& v: obj.m_mesh.vertices()){
+    for (auto v: obj.m_mesh.vertices()){
         std::array<double, 3> P;
         ob.read(reinterpret_cast<char *> ((P.data())), 3 * sizeof(double));
         m_x.first[v] = Point(P[0], P[1], P[2]);

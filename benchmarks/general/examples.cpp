@@ -60,7 +60,7 @@ stretch_rectangle& stretch_rectangle::init(int argc, char* argv[]){
             std::cout << "Usage ./prog stretch_cross_piece "; print_param_list() << std::endl;
             exit(0);
         }
-        *(bp[i]) = read_bool(argv[i]);
+        *(bp[j]) = read_bool(argv[i]);
     }
     return *this;
 }

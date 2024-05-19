@@ -10,6 +10,7 @@
 #include <string>
 #include <mutex>
 #include <iostream>
+#include <array>
 
 using namespace std;
 

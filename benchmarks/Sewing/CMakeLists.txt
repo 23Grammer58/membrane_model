@@ -1,4 +1,4 @@
-if (USE_COLLISION AND USE_DATADRIVEN_FORCES)
+if (USE_COLLISION AND USE_BOOST_LIB)
     add_executable(Sewing SewOnCilinder.cpp)# VirtualSuturer.cpp VirtualSuturer.h)
     target_link_libraries(Sewing PRIVATE LeafCollection AorticValve Core Boost::program_options)
 
